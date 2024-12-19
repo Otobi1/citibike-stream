@@ -7,6 +7,8 @@ services:
       - "2181:2181"
     environment:
       ALLOW_ANONYMOUS_LOGIN: "yes"
+    networks:
+      - citibike-network
 
   kafka:
     image: 'bitnami/kafka:latest'
@@ -18,3 +20,37 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+        - citibike-network
+
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: citibike_user
+      POSTGRES_PASSWORD: citibike_pass
+      POSTGRES_DB: citibike_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - citibike-network
+
+  spark:
+    image: custom-spark:3.5.3-kafka # bitnami/spark:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - SPARK_MODE=master
+      - SPARK_MASTER_PORT=7077
+    volumes:
+      - ./spark_jobs:/opt/spark/jobs
+    networks:
+      - citibike-network
+
+volumes:
+  postgres_data:
+
+networks:
+  citibike-network:
+    driver: bridge
