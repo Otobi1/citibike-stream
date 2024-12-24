@@ -5,10 +5,16 @@ import json
 import psycopg2
 import os
 
+os.environ['PYSPARK_SUBMIT_ARGS'] = '--packages org.apache.spark:spark-streaming-kafka-0-10_2.12:3.5.3, \
+            org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3 pyspark-shell'
+
+
 # Initialize Spark Session
-spark = SparkSession.builder \
-    .appName("CitiBikeStationStatus") \
-    .getOrCreate()
+spark = (SparkSession.builder
+         .master("local[*]")
+         .appName("CitiBikeStationStatus")
+         # .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3")
+         .getOrCreate())
 
 # Define schema based on Citi Bike API
 schema = StructType([
@@ -28,9 +34,9 @@ df = spark.readStream \
 
 # Parse the JSON data
 json_df = df.selectExpr("CAST(value AS STRING) as json") \
-    .select(from_json(col('json'), schema).alias('data')) \
-    .select('data.*') \
-    .withColumn("last_reported", (col('last_reported') / 1000).cast(TimestampType()))
+    .select(from_json(col("json"), schema).alias("data")) \
+    .select("data.*") \
+    .withColumn("last_reported", (col("last_reported") / 1000).cast(TimestampType()))
 
 # Write to PostgreSQL
 def foreach_batch_function(batch_df, batch_id):
