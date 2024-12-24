@@ -48,6 +48,23 @@ services:
     networks:
       - citibike-network
 
+  python_app:
+    build: ./python_app
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=citibike_user
+      - POSTGRES_PASSWORD=citibike_pass
+      - POSTGRES_DB=citibike_db
+      - STATION_STATUS_URL=https://gbfs.citibikenyc.com/gbfs/en/station_status.json
+      - KAFKA_TOPIC=station_status
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    depends_on:
+      - postgres
+      - kafka
+    networks:
+      - citibike-network
+
 volumes:
   postgres_data:
 
