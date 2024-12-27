@@ -43,19 +43,23 @@ except Exception as e:
 # Create Table if Not Exists
 create_table_query = """
 CREATE TABLE IF NOT EXISTS station_status (
-    station_id VARCHAR(50) PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
+    station_id VARCHAR(50),
     num_bikes_available INTEGER,
     num_docks_available INTEGER,
     is_installed BOOLEAN,
     is_renting BOOLEAN,
     is_returning BOOLEAN,
-    last_reported TIMESTAMP
+    last_reported TIMESTAMP,
+    inserted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_station_id ON station_status(station_id);
 """
 
 try:
     cursor.execute(create_table_query)
-    print("Ensured that station_status table exists.")
+    print("Ensured that station_status table exists with history tracking.")
 except Exception as e:
     print(f"Error creating table: {e}")
     exit(1)
@@ -69,23 +73,16 @@ def fetch_and_store():
 
         # Prepare data for insertion
         insert_query = """
-        INSERT INTO station_status (
-            station_id,
-            num_bikes_available,
-            num_docks_available,
-            is_installed,
-            is_renting,
-            is_returning,
-            last_reported
-        ) VALUES %s
-        ON CONFLICT (station_id) DO UPDATE SET
-            num_bikes_available = EXCLUDED.num_bikes_available,
-            num_docks_available = EXCLUDED.num_docks_available,
-            is_installed = EXCLUDED.is_installed,
-            is_renting = EXCLUDED.is_renting,
-            is_returning = EXCLUDED.is_returning,
-            last_reported = EXCLUDED.last_reported;
-        """
+                INSERT INTO station_status (
+                    station_id,
+                    num_bikes_available,
+                    num_docks_available,
+                    is_installed,
+                    is_renting,
+                    is_returning,
+                    last_reported
+                ) VALUES %s
+                """
 
         records = []
         for station in stations:
