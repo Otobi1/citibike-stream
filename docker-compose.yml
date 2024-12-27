@@ -45,6 +45,7 @@ services:
       - SPARK_MASTER_PORT=7077
     volumes:
       - ./spark_jobs:/opt/spark/jobs
+      - ./python_app/jars:/opt/spark/jars
     networks:
       - citibike-network
 
