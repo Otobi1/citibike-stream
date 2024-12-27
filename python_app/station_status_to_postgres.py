@@ -126,4 +126,4 @@ def fetch_and_store():
 if __name__ == "__main__":
     while True:
         fetch_and_store()
-        time.sleep(60)  # Fetch and store data every 60 seconds
+        time.sleep(60)  # Fetch and store data every 60 seconds (could also be every 5 minutes)
