@@ -1,159 +1,140 @@
-# scripts/ingest_tripdata.py
+# ingest_tripdata.py
 
 import os
 import pandas as pd
-import psycopg2
-from psycopg2 import extras
 import logging
 import sys
+from sqlalchemy import create_engine, text
+from pathlib import Path
 
-# Configure logging
+# Configure logging to both stdout and a log file
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s %(levelname)s:%(message)s'
+    format='%(asctime)s %(levelname)s:%(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('ingest_tripdata.log')
+    ]
 )
 
 # Configuration
-PROCESSED_DIR = "../data/processed_tripdata"
-PARQUET_FILE = "combined_tripdata.parquet"
-
-POSTGRES_HOST = "localhost"  # Host is localhost since Docker port is mapped
+CLEANED_DIR = os.path.expanduser("./data/processed_tripdata/cleaned_raw")
+POSTGRES_HOST = "localhost"
 POSTGRES_PORT = "5432"
 POSTGRES_USER = "citibike_user"
 POSTGRES_PASSWORD = "citibike_pass"
 POSTGRES_DB = "citibike_db"
 
-
-def connect_postgres():
-    try:
-        conn = psycopg2.connect(
-            host=POSTGRES_HOST,
-            port=POSTGRES_PORT,
-            user=POSTGRES_USER,
-            password=POSTGRES_PASSWORD,
-            dbname=POSTGRES_DB
-        )
-        conn.autocommit = True
-        cursor = conn.cursor()
-        logging.info("Connected to PostgreSQL successfully.")
-        return conn, cursor
-    except Exception as e:
-        logging.error(f"Error connecting to PostgreSQL: {e}")
-        sys.exit(1)
+# Database connection string
+DB_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 
 
-def create_tables(cursor):
-    # Create tripdata table
-    create_tripdata_table = """
-    CREATE TABLE IF NOT EXISTS tripdata (
-        ride_id VARCHAR(255) PRIMARY KEY,
-        rideable_type VARCHAR(50),
-        started_at TIMESTAMP,
-        ended_at TIMESTAMP,
-        start_station_name VARCHAR(255),
-        start_station_id VARCHAR(50),
-        end_station_name VARCHAR(255),
-        end_station_id VARCHAR(50),
-        start_lat DOUBLE PRECISION,
-        start_lng DOUBLE PRECISION,
-        end_lat DOUBLE PRECISION,
-        end_lng DOUBLE PRECISION,
-        member_casual VARCHAR(50),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
+def create_tables(engine):
     """
-
-    # Create ingestion log table
-    create_ingestion_log_table = """
-    CREATE TABLE IF NOT EXISTS ingestion_log (
-        id SERIAL PRIMARY KEY,
-        file_name VARCHAR(255) UNIQUE,
-        ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
+    Creates the tripdata and ingestion_log tables if they don't exist.
     """
-
     try:
-        cursor.execute(create_tripdata_table)
-        cursor.execute(create_ingestion_log_table)
+        with engine.connect() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS tripdata (
+                    ride_id VARCHAR(255) PRIMARY KEY,
+                    rideable_type VARCHAR(50),
+                    started_at TIMESTAMP,
+                    ended_at TIMESTAMP,
+                    start_station_name VARCHAR(255),
+                    start_station_id VARCHAR(50),
+                    end_station_name VARCHAR(255),
+                    end_station_id VARCHAR(50),
+                    start_lat DOUBLE PRECISION,
+                    start_lng DOUBLE PRECISION,
+                    end_lat DOUBLE PRECISION,
+                    end_lng DOUBLE PRECISION,
+                    member_casual VARCHAR(50),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS ingestion_log (
+                    id SERIAL PRIMARY KEY,
+                    file_name VARCHAR(255) UNIQUE,
+                    ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """))
         logging.info("Ensured that tripdata and ingestion_log tables exist.")
     except Exception as e:
         logging.error(f"Error creating tables: {e}")
         sys.exit(1)
 
 
-def ingest_data(cursor, df):
+def get_ingested_files(engine):
+    """
+    Retrieves a set of already ingested file names from the ingestion_log table.
+    """
     try:
-        # Replace NaNs with None
-        df = df.where(pd.notnull(df), None)
-
-        # Define insert query with ON CONFLICT to avoid duplicates
-        insert_query = """
-        INSERT INTO tripdata (
-            ride_id,
-            rideable_type,
-            started_at,
-            ended_at,
-            start_station_name,
-            start_station_id,
-            end_station_name,
-            end_station_id,
-            start_lat,
-            start_lng,
-            end_lat,
-            end_lng,
-            member_casual
-        ) VALUES %s
-        ON CONFLICT (ride_id) DO NOTHING;
-        """
-
-        records = df[['ride_id', 'rideable_type', 'started_at', 'ended_at',
-                      'start_station_name', 'start_station_id', 'end_station_name',
-                      'end_station_id', 'start_lat', 'start_lng',
-                      'end_lat', 'end_lng', 'member_casual']].values.tolist()
-
-        extras.execute_values(cursor, insert_query, records, page_size=1000)
-        logging.info(f"Inserted {len(records)} records into PostgreSQL.")
+        query = "SELECT file_name FROM ingestion_log;"
+        ingested_files = pd.read_sql(query, engine)['file_name'].tolist()
+        logging.info(f"Already ingested {len(ingested_files)} file(s).")
+        return set(ingested_files)
     except Exception as e:
-        logging.error(f"Error inserting data into PostgreSQL: {e}")
+        logging.error(f"Error fetching ingestion log: {e}")
+        sys.exit(1)
+
+
+def ingest_parquet(engine, file_path):
+    """
+    Ingests a single Parquet file into the tripdata table and logs the ingestion.
+    """
+    file_name = os.path.basename(file_path)
+    try:
+        df = pd.read_parquet(file_path)
+        logging.info(f"Read parquet file {file_name} with {len(df)} records.")
+
+        # Connect using SQLAlchemy and insert data
+        df.to_sql('tripdata', engine, if_exists='append', index=False, method='multi')
+        logging.info(f"Inserted {len(df)} records from {file_name} into PostgreSQL.")
+
+        # Log ingestion
+        with engine.connect() as conn:
+            conn.execute(text("""
+                INSERT INTO ingestion_log (file_name) VALUES (:file_name)
+                ON CONFLICT (file_name) DO NOTHING;
+            """), {'file_name': file_name})
+        logging.info(f"Logged ingestion of {file_name}.")
+    except Exception as e:
+        logging.error(f"Error ingesting {file_name}: {e}")
 
 
 def main():
-    # Connect to PostgreSQL
-    conn, cursor = connect_postgres()
-
-    # Create tables
-    create_tables(cursor)
-
-    # Read the Parquet file
-    parquet_path = os.path.join(PROCESSED_DIR, PARQUET_FILE)
-    if not os.path.exists(parquet_path):
-        logging.error(f"Parquet file not found: {parquet_path}")
+    """
+    Main function to ingest all new Parquet files into PostgreSQL.
+    """
+    # Create SQLAlchemy engine
+    try:
+        engine = create_engine(DB_URL)
+        logging.info("Database engine created successfully.")
+    except Exception as e:
+        logging.error(f"Error creating database engine: {e}")
         sys.exit(1)
 
-    try:
-        df = pd.read_parquet(parquet_path)
-        logging.info(f"Read Parquet file with {len(df)} records.")
-    except Exception as e:
-        logging.error(f"Error reading Parquet file: {e}")
-        sys.exit(1)
+    # Create tables if they don't exist
+    create_tables(engine)
 
-    # Ingest data into PostgreSQL
-    ingest_data(cursor, df)
+    # Get list of already ingested files
+    ingested_files = get_ingested_files(engine)
 
-    # Log ingestion
-    try:
-        insert_log_query = """
-        INSERT INTO ingestion_log (file_name) VALUES (%s)
-        ON CONFLICT (file_name) DO NOTHING;
-        """
-        cursor.execute(insert_log_query, (PARQUET_FILE,))
-        logging.info(f"Logged ingestion of {PARQUET_FILE}.")
-    except Exception as e:
-        logging.error(f"Error logging ingestion of {PARQUET_FILE}: {e}")
+    # Iterate over parquet files in the cleaned_raw directory recursively
+    parquet_files = list(Path(CLEANED_DIR).glob("**/*.parquet"))
+    if not parquet_files:
+        logging.info("No Parquet files found to ingest.")
+        sys.exit(0)
 
-    # Close connections
-    cursor.close()
-    conn.close()
+    for parquet_file in parquet_files:
+        file_name = parquet_file.name
+        if file_name in ingested_files:
+            logging.info(f"File {file_name} already ingested. Skipping.")
+            continue
+        ingest_parquet(engine, parquet_file)
+
     logging.info("Data ingestion process completed.")
 
 
