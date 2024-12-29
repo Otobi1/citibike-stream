@@ -82,8 +82,28 @@ services:
     command: [ "python", "station_information_to_postgres.py" ]
     restart: "no"
 
+  tripdata_ingestor:
+    build: ./python_app
+    environment:
+      - PROCESSED_DIR=/data/processed_tripdata
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=citibike_user
+      - POSTGRES_PASSWORD=citibike_pass
+      - POSTGRES_DB=citibike_db
+    volumes:
+      - ../data/processed_tripdata:/data/processed_tripdata
+    depends_on:
+      - postgres
+    command: [ "python", "ingest_tripdata.py" ]
+    networks:
+      - citibike-network
+    restart: "no"
+
 volumes:
   postgres_data:
+  tripdata_downloads:
+  tripdata_processed:
 
 networks:
   citibike-network:
