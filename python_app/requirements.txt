@@ -2,3 +2,5 @@ requests
 psycopg2-binary
 kafka-python
 alembic
+pandas
+boto3
