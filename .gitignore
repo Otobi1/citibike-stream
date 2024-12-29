@@ -3,3 +3,4 @@ citivenv
 .DS_Store
 jars
 .env
+*.log
