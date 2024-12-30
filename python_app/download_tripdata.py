@@ -38,7 +38,9 @@ def get_available_files():
         keys = [content.find('s3:Key', namespace).text for content in root.findall('s3:Contents', namespace)]
 
         # Combined regex for yearly and monthly files with and without .csv
-        pattern = re.compile(r'^(\d{4}-citibike-tripdata\.zip|\d{6}-citibike-tripdata(?:\.csv)?\.zip)$')
+        # pattern = re.compile(r'^(\d{4}-citibike-tripdata\.zip|\d{6}-citibike-tripdata(?:\.csv)?\.zip)$')
+        pattern = re.compile(r'^(\d{6}-citibike-tripdata(?:\.csv)?\.zip)$') # downloading data for 2024 alone for now
+
         tripdata_files = [key for key in keys if pattern.match(key)]
 
         logging.info(f"Found {len(tripdata_files)} tripdata files matching the pattern.")
