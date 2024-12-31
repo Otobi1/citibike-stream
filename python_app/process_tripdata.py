@@ -8,6 +8,7 @@ import uuid
 import time
 import math
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Configure logging to both stdout and a log file with timestamp and log level
 LOG_FILE = os.getenv('PROCESS_LOG_FILE', 'process_tripdata.log')
@@ -87,7 +88,7 @@ def process_csv(file_path):
     Processes a single CSV file:
     - Reads the CSV
     - Ensures it adheres to the expected schema
-    - Fills missing data appropriately
+    - Removes rows with missing data
     - Logs descriptive analytics
     - Returns the cleaned DataFrame
     """
@@ -115,8 +116,16 @@ def process_csv(file_path):
         df['started_at'] = pd.to_datetime(df['started_at'], errors='coerce')
         df['ended_at'] = pd.to_datetime(df['ended_at'], errors='coerce')
 
-        # Add month column for partitioning
-        df['month'] = df['started_at'].dt.to_period('M').astype(str)
+        # Add month column for partitioning as actual date (e.g., '2024-01-01')
+        df['month'] = df['started_at'].dt.to_period('M').dt.to_timestamp()
+
+        # Remove rows with any missing data
+        initial_count = len(df)
+        df.dropna(inplace=True)
+        final_count = len(df)
+        dropped_rows = initial_count - final_count
+        if dropped_rows > 0:
+            logging.info(f"Dropped {dropped_rows} rows with missing data from {file_path}.")
 
         # Descriptive Analytics Logging
 
@@ -125,56 +134,15 @@ def process_csv(file_path):
         logging.info("Total trips per month:")
         logging.info(f"\n{total_trips_per_month}")
 
-        # Trips per month with no ride_id
+        # Trips per month with no ride_id (should be zero after dropping)
         trips_no_ride_id = df[df['ride_id'].isna()].groupby('month').size()
         logging.info("Trips per month with no ride_id:")
         logging.info(f"\n{trips_no_ride_id}")
 
-        # Trips per month with no started_at or ended_at
+        # Trips per month with no started_at or ended_at (should be zero after dropping)
         trips_no_start_end = df[df['started_at'].isna() | df['ended_at'].isna()].groupby('month').size()
         logging.info("Trips per month with no started_at or ended_at:")
         logging.info(f"\n{trips_no_start_end}")
-
-        # Handle Missing Data by Filling
-
-        # Fill missing 'ride_id' with a unique UUID
-        missing_ride_id_count = df['ride_id'].isna().sum()
-        if missing_ride_id_count > 0:
-            logging.info(f"Filling {missing_ride_id_count} missing ride_id(s) with UUIDs.")
-            df['ride_id'] = df['ride_id'].fillna(
-                pd.Series([str(uuid.uuid4()) for _ in range(missing_ride_id_count)],
-                          index=df[df['ride_id'].isna()].index)
-            )
-
-        # Fill missing 'started_at' and 'ended_at' with a default timestamp or inferred value
-        if df['started_at'].isna().any():
-            earliest_start = df['started_at'].min()
-            default_start = earliest_start if pd.notna(earliest_start) else pd.Timestamp('2000-01-01')
-            missing_started_at_count = df['started_at'].isna().sum()
-            logging.info(f"Filling {missing_started_at_count} missing started_at(s) with default value: {default_start}")
-            df['started_at'] = df['started_at'].fillna(default_start)
-
-        if df['ended_at'].isna().any():
-            earliest_end = df['ended_at'].min()
-            default_end = earliest_end if pd.notna(earliest_end) else pd.Timestamp('2000-01-01')
-            missing_ended_at_count = df['ended_at'].isna().sum()
-            logging.info(f"Filling {missing_ended_at_count} missing ended_at(s) with default value: {default_end}")
-            df['ended_at'] = df['ended_at'].fillna(default_end)
-
-        # Fill missing categorical fields with 'unknown'
-        categorical_fields = ['rideable_type', 'member_casual',
-                              'start_station_name', 'start_station_id',
-                              'end_station_name', 'end_station_id']
-        df[categorical_fields] = df[categorical_fields].fillna('unknown')
-
-        # Fill missing numerical fields with the mean of the column
-        numerical_fields = ['start_lat', 'start_lng', 'end_lat', 'end_lng']
-        for field in numerical_fields:
-            if df[field].isna().any():
-                mean_value = df[field].mean()
-                missing_count = df[field].isna().sum()
-                logging.info(f"Filling {missing_count} missing {field}(s) with mean value: {mean_value}")
-                df[field] = df[field].fillna(mean_value)
 
         # Ensure data types are consistent
         df['ride_id'] = df['ride_id'].astype(str)
@@ -185,9 +153,9 @@ def process_csv(file_path):
         df['end_station_name'] = df['end_station_name'].astype(str)
         df['end_station_id'] = df['end_station_id'].astype(str)
 
-        # Log the number of missing values after filling
+        # Log the number of missing values after dropping
         total_missing_after = df.isna().sum()
-        logging.info(f"Missing values after filling:\n{total_missing_after}")
+        logging.info(f"Missing values after dropping rows:\n{total_missing_after}")
 
         # Verify Schema Consistency
         if list(df.columns) != EXPECTED_COLUMNS + ['month']:
@@ -211,7 +179,7 @@ def save_parquet_partitioned(df, month, target_records=TARGET_RECORDS_PER_PARQUE
         if num_chunks == 0:
             num_chunks = 1
 
-        logging.info(f"Saving data for {month} into {num_chunks} Parquet file(s) with up to {target_records} records each.")
+        logging.info(f"Saving data for {month.date()} into {num_chunks} Parquet file(s) with up to {target_records} records each.")
 
         for chunk_num in range(num_chunks):
             start = chunk_num * target_records
@@ -219,7 +187,7 @@ def save_parquet_partitioned(df, month, target_records=TARGET_RECORDS_PER_PARQUE
             chunk_df = df.iloc[start:end]
 
             # Define output file path
-            output_file = os.path.join(CLEANED_DIR, month, f"tripdata_{month}_part{chunk_num + 1}.parquet")
+            output_file = os.path.join(CLEANED_DIR, month.strftime('%Y-%m-%d'), f"tripdata_{month.strftime('%Y-%m-%d')}_part{chunk_num + 1}.parquet")
             os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
             # Save as Parquet with compression for efficiency
@@ -227,7 +195,7 @@ def save_parquet_partitioned(df, month, target_records=TARGET_RECORDS_PER_PARQUE
             logging.info(f"Saved Parquet file: {output_file} with {len(chunk_df)} records.")
 
     except Exception as e:
-        logging.error(f"Error saving Parquet files for {month}: {e}")
+        logging.error(f"Error saving Parquet files for {month.date()}: {e}")
 
 def cleanup_extracted_files(extract_to):
     """
@@ -322,5 +290,4 @@ def main():
     logging.info("Data processing completed.")
 
 if __name__ == "__main__":
-    from concurrent.futures import ThreadPoolExecutor, as_completed
     main()
