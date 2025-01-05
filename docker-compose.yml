@@ -33,6 +33,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
     networks:
       - citibike-network
 
@@ -99,6 +100,24 @@ services:
     networks:
       - citibike-network
     restart: "no"
+
+  metabase:
+    image: metabase/metabase:latest
+    container_name: metabase_app
+    platform: linux/amd64
+    ports:
+      - "3000:3000"
+    environment:
+      - MB_DB_TYPE=${METABASE_DB_TYPE}
+      - MB_DB_DBNAME=${METABASE_DB_NAME}
+      - MB_DB_PORT=${METABASE_DB_PORT}
+      - MB_DB_USER=${METABASE_DB_USER}
+      - MB_DB_PASS=${METABASE_DB_PASSWORD}
+      - MB_DB_HOST=${METABASE_DB_HOST}
+    depends_on:
+      - postgres
+    networks:
+      - citibike-network
 
 volumes:
   postgres_data:
