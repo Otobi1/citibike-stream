@@ -1,6 +1,6 @@
 **Overview**
 
-Data project to stream and batch [citibike-nyc](https://citibikenyc.com/system-data) and [specs](https://github.com/MobilityData/gbfs/blob/master/gbfs.md) data locally using open source solutions
+Data project to stream and batch [citibike-nyc](https://citibikenyc.com/system-data) ([specs](https://github.com/MobilityData/gbfs/blob/master/gbfs.md)) data locally using open source solutions
 
 ![citibike stream & batch](overview.png)
 
